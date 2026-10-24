@@ -1,0 +1,28 @@
+{
+  "entity_filters": {
+    "all": {
+      "*": { "min_score": 0.55 }
+    }
+  },
+  "entity_whitelist": {
+    "all": [
+      "EMAIL_ADDRESS",
+      "PHONE_NUMBER",
+      "IP_ADDRESS",
+      "CN_ID",
+      "PERSON",
+      "ORGANIZATION",
+      "PHYSICAL_ADDRESS",
+      "USER_NAME",
+      "BANK_NUMBER",
+      "PAYMENT",
+      "VERIFY_CODE",
+      "PASSWORD",
+      "RANDOM_SEED",
+      "PRIVATE_KEY",
+      "URL"
+    ]
+  }
+}
+
+

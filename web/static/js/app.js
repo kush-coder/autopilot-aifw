@@ -1,0 +1,460 @@
+// AIFW Web Module JavaScript
+
+class AIFWApp {
+    constructor() {
+        this.originalText = '';
+        this.anonymizedText = '';
+        this.placeholdersMap = {};
+        this.entities = [];
+        this.init();
+    }
+
+    init() {
+        this.bindEvents();
+        this.checkHealth();
+        this.loadGitHubStars();
+        // Apply default mask configuration on load
+        this.updateMaskConfig();
+    }
+
+    bindEvents() {
+        document.getElementById('analyzeBtn').addEventListener('click', () => this.analyzeText());
+        document.getElementById('maskBtn').addEventListener('click', () => this.maskText());
+        document.getElementById('restoreBtn').addEventListener('click', () => this.restoreText());
+        document.getElementById('clearBtn').addEventListener('click', () => this.clearAll());
+        document.getElementById('startAnimation').addEventListener('click', () => this.startWorkflowAnimation());
+        // Update mask configuration immediately when user changes any checkbox
+        const maskCheckboxes = document.querySelectorAll('.mask-checkbox');
+        maskCheckboxes.forEach((el) => {
+            el.addEventListener('change', () => this.updateMaskConfig());
+        });
+    }
+
+    async checkHealth() {
+        try {
+            const response = await fetch('/api/health');
+            const data = await response.json();
+            if (!data.aifw_available) {
+                this.showAlert('warning', 'AIFW 服务不可用，某些功能可能无法使用');
+            }
+        } catch (error) {
+            console.error('Health check failed:', error);
+        }
+    }
+
+    showAlert(type, message) {
+        const alert = document.getElementById('statusAlert');
+        const statusText = document.getElementById('statusText');
+        statusText.innerHTML = `<i class="fas fa-${type === 'success' ? 'check-circle' : type === 'error' ? 'exclamation-circle' : 'info-circle'} me-2"></i>${message}`;
+        alert.className = `alert alert-${type}`;
+        alert.style.display = 'block';
+        setTimeout(() => {
+            alert.style.display = 'none';
+        }, 5000);
+    }
+
+    showLoading(show) {
+        const alert = document.getElementById('statusAlert');
+        const statusText = document.getElementById('statusText');
+        if (show) {
+            statusText.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>处理中...';
+            alert.className = 'alert alert-info';
+            alert.style.display = 'block';
+        } else {
+            alert.style.display = 'none';
+        }
+    }
+
+    // Collect mask configuration from UI checkboxes.
+    getMaskConfigFromUI() {
+        const cfg = {};
+        const byId = (id) => document.getElementById(id);
+        const get = (id, def = false) => {
+            const el = byId(id);
+            return el ? !!el.checked : def;
+        };
+        // Map UI checkboxes to backend mask_config keys
+        cfg.maskAddress = get('maskAddressCheckbox', false);
+        cfg.maskEmail = get('maskEmailCheckbox', true);
+        cfg.maskOrganization = get('maskOrganizationCheckbox', false);
+        cfg.maskUserName = get('maskUserNameCheckbox', false);
+        cfg.maskPhoneNumber = get('maskPhoneCheckbox', true);
+        cfg.maskBankNumber = get('maskBankCheckbox', true);
+        cfg.maskPayment = get('maskPaymentCheckbox', true);
+        cfg.maskVerificationCode = get('maskVcodeCheckbox', true);
+        cfg.maskPassword = get('maskPasswordCheckbox', true);
+        cfg.maskRandomSeed = get('maskRandomSeedCheckbox', true);
+        cfg.maskPrivateKey = get('maskPrivateKeyCheckbox', true);
+        cfg.maskUrl = get('maskUrlCheckbox', false);
+        return cfg;
+    }
+
+    // Send updated mask configuration to backend immediately after user changes settings.
+    async updateMaskConfig() {
+        const maskConfig = this.getMaskConfigFromUI();
+        try {
+            const response = await fetch('/api/config', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ mask_config: maskConfig })
+            });
+            if (!response.ok) {
+                const data = await response.json().catch(() => ({}));
+                console.error('[AIFW Web] /api/config failed:', data);
+            }
+        } catch (error) {
+            console.error('[AIFW Web] /api/config network error:', error);
+        }
+    }
+
+    async analyzeText() {
+        const text = document.getElementById('inputText').value.trim();
+        if (!text) {
+            this.showAlert('warning', '请输入要分析的文本');
+            return;
+        }
+
+        this.showLoading(true);
+        try {
+            const language = document.getElementById('languageSelect').value;
+            const response = await fetch('/api/analyze', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ text, language })
+            });
+
+            const data = await response.json();
+            if (response.ok) {
+                this.entities = data.entities;
+                this.displayAnalysis(text, data.entities);
+                this.showAlert('success', `检测到 ${data.entities.length} 个敏感信息实体`);
+            } else {
+                this.showAlert('error', data.error || '分析失败');
+            }
+        } catch (error) {
+            this.showAlert('error', '网络错误：' + error.message);
+        } finally {
+            this.showLoading(false);
+        }
+    }
+
+    async maskText() {
+        const text = document.getElementById('inputText').value.trim();
+        if (!text) {
+            this.showAlert('warning', '请输入要匿名化的文本');
+            return;
+        }
+
+        this.showLoading(true);
+        try {
+            const language = document.getElementById('languageSelect').value;
+            const response = await fetch('/api/mask', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ text, language })
+            });
+
+            const data = await response.json();
+            if (response.ok) {
+                this.originalText = data.original_text;
+                this.anonymizedText = data.anonymized_text;
+                this.placeholdersMap = data.placeholders_map;
+                this.displayMasking(data.original_text, data.anonymized_text);
+                document.getElementById('restoreBtn').disabled = false;
+                this.showAlert('success', '文本匿名化完成');
+            } else {
+                this.showAlert('error', data.error || '匿名化失败');
+            }
+        } catch (error) {
+            this.showAlert('error', '网络错误：' + error.message);
+        } finally {
+            this.showLoading(false);
+        }
+    }
+
+    async restoreText() {
+        if (!this.anonymizedText || !this.placeholdersMap) {
+            this.showAlert('warning', '没有可恢复的文本');
+            return;
+        }
+
+        this.showLoading(true);
+        try {
+            const response = await fetch('/api/restore', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    text: this.anonymizedText,
+                    placeholders_map: this.placeholdersMap
+                })
+            });
+
+            const data = await response.json();
+            if (response.ok) {
+                this.displayRestoration(data.anonymized_text, data.restored_text);
+                this.showAlert('success', '文本恢复完成');
+            } else {
+                this.showAlert('error', data.error || '恢复失败');
+            }
+        } catch (error) {
+            this.showAlert('error', '网络错误：' + error.message);
+        } finally {
+            this.showLoading(false);
+        }
+    }
+
+    displayAnalysis(text, entities) {
+        document.getElementById('originalText').textContent = text;
+        document.getElementById('processedText').textContent = `检测到 ${entities.length} 个敏感信息实体`;
+        
+        this.displayEntities(entities);
+        const placeholdersMap = this.entitiesToPlaceholdersMap(entities);
+        this.displayPlaceholders(placeholdersMap);
+        // Show both entities and placeholder table when analyzing
+        document.getElementById('entitiesSection').style.display = 'block';
+        document.getElementById('placeholdersSection').style.display = 'block';
+    }
+
+    // Build a placeholder map from detected entities for display purpose
+    entitiesToPlaceholdersMap(entities) {
+        const placeholders = {};
+        let counter = 0;
+
+        entities.forEach((entity) => {
+            counter += 1;
+            let type = entity.entity_type;
+            // Normalize entity type to string for placeholder construction
+            if (typeof type !== 'string') {
+                type = `TYPE_${String(type)}`;
+            }
+            const placeholder = `__PII_${type}_${counter}__`;
+            placeholders[placeholder] = entity.text;
+        });
+
+        return placeholders;
+    }
+
+    displayMasking(original, anonymized) {
+        document.getElementById('originalText').textContent = original;
+        document.getElementById('processedText').textContent = anonymized;
+        
+        document.getElementById('entitiesSection').style.display = 'none';
+        document.getElementById('placeholdersSection').style.display = 'block';
+    }
+
+    displayRestoration(anonymized, restored) {
+        document.getElementById('originalText').textContent = anonymized;
+        document.getElementById('processedText').textContent = restored;
+    }
+
+    displayEntities(entities) {
+        const tbody = document.getElementById('entitiesTable');
+        tbody.innerHTML = '';
+        
+        entities.forEach(entity => {
+            const row = tbody.insertRow();
+            const typeKey = entity.entity_type;
+            row.insertCell(0).textContent = this.getEntityTypeName(typeKey);
+            row.insertCell(1).textContent = entity.text;
+            row.insertCell(2).textContent = `${entity.start}-${entity.end}`;
+            row.insertCell(3).textContent = (entity.score * 100).toFixed(1) + '%';
+            
+            // 添加类型样式
+            const typeCell = row.cells[0];
+            const cssKey = String(typeKey).toLowerCase().replace('_', '-');
+            typeCell.className = `entity-${cssKey}`;
+        });
+    }
+
+    displayPlaceholders(placeholders) {
+        const tbody = document.getElementById('placeholdersTable');
+        tbody.innerHTML = '';
+        Object.entries(placeholders).forEach(([placeholder, original]) => {
+            const row = tbody.insertRow();
+            row.insertCell(0).textContent = placeholder;
+            row.insertCell(1).textContent = original;
+        });
+    }
+
+    getEntityTypeName(type) {
+        const typeMap = {
+            'PHYSICAL_ADDRESS': '地址',
+            'EMAIL_ADDRESS': '邮箱地址',
+            'ORGANIZATION': '组织',
+            'USER_NAME': '人名',
+            'PHONE_NUMBER': '电话号码',
+            'BANK_NUMBER': '银行账户',
+            'PAYMENT': '支付账号',
+            'VERIFICATION_CODE': '验证码',
+            'PASSWORD': '密码',
+            'RANDOM_SEED': '随机种子',
+            'PRIVATE_KEY': '私钥',
+            'URL_ADDRESS': '网址',
+            'IP_ADDRESS': 'IP地址',
+        };
+        return typeMap[type] || type;
+    }
+
+    clearAll() {
+        document.getElementById('inputText').value = '';
+        document.getElementById('originalText').textContent = '点击"分析敏感信息"或"匿名化处理"按钮开始...';
+        document.getElementById('processedText').textContent = '处理结果将显示在这里...';
+        document.getElementById('restoreBtn').disabled = true;
+        document.getElementById('entitiesSection').style.display = 'none';
+        document.getElementById('placeholdersSection').style.display = 'none';
+        this.originalText = '';
+        this.anonymizedText = '';
+        this.placeholdersMap = {};
+        this.entities = [];
+    }
+
+    startWorkflowAnimation() {
+        const button = document.getElementById('startAnimation');
+        const steps = document.querySelectorAll('.workflow-step');
+        const arrows = document.querySelectorAll('.workflow-arrow');
+        const userText = document.getElementById('userText');
+        const firewallText = document.getElementById('firewallText');
+        const llmText = document.getElementById('llmText');
+        const arrow1 = document.getElementById('arrow1');
+        const arrow2 = document.getElementById('arrow2');
+        
+        // 禁用按钮防止重复点击
+        button.disabled = true;
+        button.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>动画播放中...';
+        
+        // 重置所有步骤状态
+        steps.forEach(step => {
+            step.classList.remove('active', 'completed');
+        });
+        
+        // 重置箭头状态
+        arrows.forEach(arrow => {
+            arrow.classList.remove('reverse');
+        });
+        
+        // 定义动画序列
+        const animationSequence = [
+            // 去程阶段
+            { step: 0, text: { user: '发送敏感数据', firewall: '匿名化处理', llm: '处理安全数据' }, arrows: { arrow1: 'right', arrow2: 'right' } },
+            { step: 1, text: { user: '发送敏感数据', firewall: '匿名化处理', llm: '处理安全数据' }, arrows: { arrow1: 'right', arrow2: 'right' } },
+            { step: 2, text: { user: '发送敏感数据', firewall: '匿名化处理', llm: '处理安全数据' }, arrows: { arrow1: 'right', arrow2: 'right' } },
+            
+            // 回程阶段
+            { step: 2, text: { user: '获得安全结果', firewall: '还原隐私数据', llm: '返回处理结果' }, arrows: { arrow1: 'left', arrow2: 'left' } },
+            { step: 1, text: { user: '获得安全结果', firewall: '还原隐私数据', llm: '返回处理结果' }, arrows: { arrow1: 'left', arrow2: 'left' } },
+            { step: 0, text: { user: '获得安全结果', firewall: '还原隐私数据', llm: '返回处理结果' }, arrows: { arrow1: 'left', arrow2: 'left' } }
+        ];
+        
+        let currentIndex = 0;
+        const stepDelay = 1000; // 每个步骤显示1秒
+        
+        const animateStep = () => {
+            if (currentIndex < animationSequence.length) {
+                const current = animationSequence[currentIndex];
+                
+                // 激活当前步骤
+                steps[current.step].classList.add('active');
+                
+                // 更新文字内容
+                userText.textContent = current.text.user;
+                firewallText.textContent = current.text.firewall;
+                llmText.textContent = current.text.llm;
+                
+                // 更新箭头方向
+                if (current.arrows.arrow1 === 'left') {
+                    arrow1.classList.add('reverse');
+                    arrow1.querySelector('i').className = 'fas fa-arrow-left';
+                } else {
+                    arrow1.classList.remove('reverse');
+                    arrow1.querySelector('i').className = 'fas fa-arrow-right';
+                }
+                
+                if (current.arrows.arrow2 === 'left') {
+                    arrow2.classList.add('reverse');
+                    arrow2.querySelector('i').className = 'fas fa-arrow-left';
+                } else {
+                    arrow2.classList.remove('reverse');
+                    arrow2.querySelector('i').className = 'fas fa-arrow-right';
+                }
+                
+                currentIndex++;
+                
+                // 延迟后继续下一步
+                setTimeout(() => {
+                    if (currentIndex > 1) {
+                        steps[current.step].classList.remove('active');
+                        steps[current.step].classList.add('completed');
+                    }
+                    animateStep();
+                }, stepDelay);
+            } else {
+                // 动画完成
+                setTimeout(() => {
+                    steps[0].classList.remove('active');
+                    steps[0].classList.add('completed');
+                    
+                    // 恢复按钮状态
+                    button.disabled = false;
+                    button.innerHTML = '<i class="fas fa-play me-2"></i>观看动画演示';
+                }, stepDelay);
+            }
+        };
+        
+        // 开始动画
+        animateStep();
+    }
+
+    async loadGitHubStars() {
+        const starElement = document.querySelector('.star-count');
+        if (!starElement) return;
+        
+        // 显示加载状态
+        starElement.textContent = '...';
+        starElement.className = 'star-count loading';
+        
+        try {
+            const response = await fetch('https://api.github.com/repos/funstory-ai/aifw', {
+                method: 'GET',
+                headers: {
+                    'Accept': 'application/vnd.github.v3+json',
+                }
+            });
+            
+            if (response.ok) {
+                const data = await response.json();
+                const starCount = data.stargazers_count;
+                
+                // 更新显示
+                starElement.textContent = starCount;
+                starElement.className = 'star-count success';
+                starElement.title = `${starCount} stars on GitHub`;
+                
+                // 添加成功提示
+                console.log(`GitHub stars loaded: ${starCount}`);
+            } else {
+                throw new Error(`GitHub API error: ${response.status}`);
+            }
+        } catch (error) {
+            console.log('GitHub stars not available:', error.message);
+            
+            // 显示失败状态
+            starElement.textContent = '-';
+            starElement.className = 'star-count';
+            starElement.style.color = '#ccc';
+            starElement.title = '无法获取star数量';
+        }
+    }
+}
+
+// 初始化应用
+document.addEventListener('DOMContentLoaded', () => {
+    new AIFWApp();
+});

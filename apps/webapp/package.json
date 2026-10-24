@@ -1,0 +1,20 @@
+{
+  "name": "oneaifw-webapp",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "prepare:offline": "pnpm -w --filter @oneaifw/aifw-js build && node scripts/prepare-offline.mjs",
+    "offline": "pnpm run prepare:offline",
+    "serve:coi": "node scripts/serve-coi.mjs"
+  },
+  "dependencies": {
+    "@oneaifw/aifw-js": "workspace:*",
+    "js-sha3": "^0.9.3"
+  },
+  "devDependencies": {
+    "vite": "^7.1.6"
+  }
+}
